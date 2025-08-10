@@ -1,0 +1,81 @@
+{
+  "api": {
+    "solanaTracker": {
+      "timeout": 45000,
+      "rateLimitRps": 5,
+      "requestDelayMs": 0,
+      "maxRetries": 5,
+      "retryDelayMs": 2000
+    }
+  },
+  "analysis": {
+    "ratingThreshold": 7,
+    "intervals": ["1m", "5m", "15m", "1h"],
+    "volume": {
+      "minVolumeUsd": 250000,
+      "volumeSpikeFactor": 1.5
+    },
+    "momentum": {
+      "momentumAccelerationEnabled": true,
+      "minDataPoints": 48,
+      "momentumCacheDuration": 300000
+    },
+    "entrySignals": {
+      "entrySignalEnabled": true,
+      "signalCacheDuration": 120000,
+      "volumeSurgeThreshold": 3.0,
+      "minConfidenceThreshold": 75,
+      "timeframeAlignmentThreshold": 65
+    }
+  },
+  "scheduler": {
+    "analysisInterval": "*/5 * * * *",
+    "healthCheckInterval": "*/30 * * *",
+    "cleanupInterval": "0 3 * * *"
+  },
+  "database": {
+    "path": "/app/data/memecoin.db",
+    "connectionPoolSize": 10,
+    "queryTimeout": 60000,
+    "backupEnabled": true,
+    "backupInterval": "0 1 * * *",
+    "retentionDays": 90
+  },
+  "monitoring": {
+    "healthCheck": {
+      "port": 3001
+    },
+    "metrics": {
+      "enabled": true,
+      "port": 3001
+    },
+    "logging": {
+      "level": "info",
+      "format": "json",
+      "file": {
+        "enabled": true,
+        "path": "/app/logs",
+        "maxSize": "50m",
+        "maxFiles": 14
+      }
+    },
+    "alerts": {
+      "errorRateThreshold": 0.05,
+      "responseTimeThreshold": 10000,
+      "diskSpaceThreshold": 0.85
+    }
+  },
+  "notifications": {
+    "discord": {
+      "rateLimitRpm": 50,
+      "maxRetries": 5,
+      "embedColor": "#00ff88"
+    }
+  },
+  "circuitBreaker": {
+    "failureThreshold": 10,
+    "successThreshold": 5,
+    "timeout": 120000,
+    "monitor": true
+  }
+}

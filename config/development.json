@@ -1,0 +1,47 @@
+{
+  "api": {
+    "solanaTracker": {
+      "timeout": 15000,
+      "rateLimitRps": 0.5
+    }
+  },
+  "analysis": {
+    "ratingThreshold": 6,
+    "intervals": ["5m", "15m"],
+    "momentum": {
+      "minDataPoints": 24,
+      "momentumCacheDuration": 180000
+    },
+    "entrySignals": {
+      "signalCacheDuration": 60000,
+      "volumeSurgeThreshold": 2.5,
+      "minConfidenceThreshold": 60
+    }
+  },
+  "scheduler": {
+    "analysisInterval": "*/10 * * * *"
+  },
+  "database": {
+    "path": "./database/data/memecoin-dev.db",
+    "backupEnabled": false,
+    "retentionDays": 7
+  },
+  "monitoring": {
+    "healthCheck": {
+      "port": 3001
+    },
+    "logging": {
+      "level": "debug",
+      "format": "text",
+      "file": {
+        "enabled": false
+      }
+    }
+  },
+  "notifications": {
+    "discord": {
+      "rateLimitRpm": 10,
+      "embedColor": "#ffaa00"
+    }
+  }
+}

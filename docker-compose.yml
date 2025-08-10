@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  memecoin-analyzer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: memecoin-analyzer-dev
+    environment:
+      - NODE_ENV=development
+      - SOLANA_TRACKER_API_KEY=${SOLANA_TRACKER_API_KEY}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+      - DATABASE_PATH=/app/database/data/memecoin-dev.db
+      - HEALTH_CHECK_PORT=3001
+      - LOG_LEVEL=debug
+    ports:
+      - "3001:3001"
+    volumes:
+      # Mount source code for development
+      - ./src:/app/src
+      - ./config:/app/config
+      # Persistent data volumes
+      - memecoin-db-dev:/app/database/data
+      - memecoin-logs-dev:/app/logs
+    networks:
+      - memecoin-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Optional: Redis for caching (can be added later)
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: memecoin-redis
+  #   ports:
+  #     - "6379:6379"
+  #   volumes:
+  #     - memecoin-redis:/data
+  #   networks:
+  #     - memecoin-network
+  #   restart: unless-stopped
+  #   command: redis-server --appendonly yes
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+
+  # Optional: Prometheus for metrics collection
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   container_name: memecoin-prometheus
+  #   ports:
+  #     - "9090:9090"
+  #   volumes:
+  #     - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+  #     - memecoin-prometheus:/prometheus
+  #   networks:
+  #     - memecoin-network
+  #   restart: unless-stopped
+  #   command:
+  #     - '--config.file=/etc/prometheus/prometheus.yml'
+  #     - '--storage.tsdb.path=/prometheus'
+  #     - '--web.console.libraries=/etc/prometheus/console_libraries'
+  #     - '--web.console.templates=/etc/prometheus/consoles'
+  #     - '--storage.tsdb.retention.time=200h'
+  #     - '--web.enable-lifecycle'
+
+volumes:
+  memecoin-db-dev:
+    driver: local
+  memecoin-logs-dev:
+    driver: local
+  # memecoin-redis:
+  #   driver: local
+  # memecoin-prometheus:
+  #   driver: local
+
+networks:
+  memecoin-network:
+    driver: bridge

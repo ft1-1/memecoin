@@ -1,0 +1,109 @@
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Development files
+*.log
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+# Build artifacts
+dist/
+build/
+coverage/
+
+# Database files (will be mounted as volumes)
+database/data/*.db
+database/data/*.db-*
+
+# Log files (will be mounted as volumes)
+logs/
+*.log
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Documentation
+README.md
+ARCHITECTURE.md
+CLAUDE.md
+docs/
+
+# Test files
+tests/
+test/
+**/*.test.ts
+**/*.spec.ts
+
+# Backup files
+backups/
+*.backup
+*.bak
+
+# Temporary files
+tmp/
+temp/
+.tmp/
+
+# Cache directories
+.cache/
+.parcel-cache/
+.eslintcache
+
+# Runtime data
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+.nyc_output/
+
+# Dependency directories
+jspm_packages/
+
+# Optional npm cache directory
+.npm
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# dotenv environment variables file
+.env*
+
+# Local development overrides
+config/local.json

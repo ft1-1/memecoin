@@ -1,0 +1,150 @@
+{
+  "api": {
+    "solanaTracker": {
+      "baseUrl": "https://data.solanatracker.io",
+      "apiKey": "",
+      "timeout": 30000,
+      "rateLimitRps": 1,
+      "requestDelayMs": 1000,
+      "maxRetries": 3,
+      "retryDelayMs": 1000
+    },
+    "claude": {
+      "apiKey": "",
+      "model": "claude-3-5-sonnet-20241022",
+      "timeout": 30000,
+      "maxRetries": 2,
+      "retryDelayMs": 2000,
+      "maxTokens": 4000,
+      "temperature": 0
+    }
+  },
+  "analysis": {
+    "marketCapRange": {
+      "min": 5000000,
+      "max": 50000000
+    },
+    "ratingThreshold": 7,
+    "intervals": ["1m", "5m", "15m", "1h"],
+    "technicalIndicators": {
+      "rsi": {
+        "period": 14,
+        "overbought": 70,
+        "oversold": 30
+      },
+      "macd": {
+        "fastPeriod": 12,
+        "slowPeriod": 26,
+        "signalPeriod": 9
+      },
+      "bollinger": {
+        "period": 20,
+        "stdDev": 2
+      },
+      "ema": {
+        "periods": [9, 21, 50, 200]
+      }
+    },
+    "volume": {
+      "minVolumeUsd": 100000,
+      "volumeSpikeFactor": 2.0
+    },
+    "momentum": {
+      "momentumAccelerationEnabled": true,
+      "minDataPoints": 48,
+      "momentumCacheDuration": 300000,
+      "velocityWindows": {
+        "short": 60,
+        "medium": 240
+      },
+      "fatigueThresholds": {
+        "mild": 25,
+        "moderate": 50,
+        "severe": 75
+      }
+    },
+    "entrySignals": {
+      "entrySignalEnabled": true,
+      "signalCacheDuration": 120000,
+      "volumeSurgeThreshold": 3.0,
+      "minConfidenceThreshold": 70,
+      "timeframeAlignmentThreshold": 60,
+      "weights": {
+        "volumeSurge": 0.35,
+        "momentumAcceleration": 0.30,
+        "rating": 0.25,
+        "multiTimeframe": 0.10
+      },
+      "thresholds": {
+        "strongBuy": 80,
+        "buy": 60,
+        "watch": 40
+      }
+    },
+    "aiAnalysis": {
+      "enabled": true,
+      "minTechnicalRating": 6,
+      "weight": 0.30,
+      "timeout": 30000,
+      "maxRetries": 2
+    }
+  },
+  "notifications": {
+    "discord": {
+      "enabled": true,
+      "webhookUrl": "",
+      "rateLimitRpm": 30,
+      "maxRetries": 3,
+      "embedColor": "#00ff00",
+      "mentionRoles": []
+    }
+  },
+  "scheduler": {
+    "analysisInterval": "*/5 * * * *",
+    "healthCheckInterval": "*/1 * * * *",
+    "cleanupInterval": "0 2 * * *",
+    "timezone": "UTC"
+  },
+  "database": {
+    "type": "sqlite",
+    "path": "./database/data/memecoin.db",
+    "connectionPoolSize": 5,
+    "queryTimeout": 30000,
+    "backupEnabled": true,
+    "backupInterval": "0 0 * * *",
+    "retentionDays": 30
+  },
+  "monitoring": {
+    "healthCheck": {
+      "enabled": true,
+      "port": 3001,
+      "path": "/health"
+    },
+    "metrics": {
+      "enabled": true,
+      "port": 3001,
+      "path": "/metrics"
+    },
+    "logging": {
+      "level": "info",
+      "format": "json",
+      "file": {
+        "enabled": true,
+        "path": "./logs",
+        "maxSize": "20m",
+        "maxFiles": 7
+      }
+    },
+    "alerts": {
+      "errorRateThreshold": 0.1,
+      "responseTimeThreshold": 5000,
+      "diskSpaceThreshold": 0.9
+    }
+  },
+  "circuitBreaker": {
+    "failureThreshold": 5,
+    "successThreshold": 3,
+    "timeout": 60000,
+    "monitor": true
+  }
+}

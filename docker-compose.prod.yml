@@ -1,0 +1,194 @@
+version: '3.8'
+
+services:
+  memecoin-analyzer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production-optimized
+    container_name: memecoin-analyzer-prod
+    environment:
+      - NODE_ENV=production
+      - SOLANA_TRACKER_API_KEY=${SOLANA_TRACKER_API_KEY}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+      - DATABASE_PATH=/app/database/data/memecoin.db
+      - HEALTH_CHECK_PORT=3001
+      - LOG_LEVEL=info
+    ports:
+      - "3001:3001"
+    volumes:
+      # Persistent data volumes
+      - memecoin-db-prod:/app/database/data
+      - memecoin-logs-prod:/app/logs
+      # Backup volume
+      - memecoin-backups:/app/backups
+    networks:
+      - memecoin-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.memecoin-analyzer.rule=Host(`analyzer.yourdomain.com`)"
+      - "traefik.http.routers.memecoin-analyzer.tls=true"
+      - "traefik.http.routers.memecoin-analyzer.tls.certresolver=letsencrypt"
+      - "traefik.http.services.memecoin-analyzer.loadbalancer.server.port=3001"
+
+  # Database backup service
+  db-backup:
+    image: alpine:latest
+    container_name: memecoin-backup
+    volumes:
+      - memecoin-db-prod:/data
+      - memecoin-backups:/backups
+    environment:
+      - BACKUP_RETENTION_DAYS=30
+    networks:
+      - memecoin-network
+    restart: "no"
+    command: |
+      sh -c "
+        apk add --no-cache sqlite
+        while true; do
+          echo 'Creating database backup...'
+          timestamp=$$(date +%Y%m%d_%H%M%S)
+          sqlite3 /data/memecoin.db '.backup /backups/memecoin_backup_$$timestamp.db'
+          gzip /backups/memecoin_backup_$$timestamp.db
+          
+          # Clean old backups
+          find /backups -name '*.gz' -mtime +$$BACKUP_RETENTION_DAYS -delete
+          
+          echo 'Backup completed, sleeping for 24 hours...'
+          sleep 86400
+        done
+      "
+
+  # Log rotation service
+  log-rotator:
+    image: alpine:latest
+    container_name: memecoin-log-rotator
+    volumes:
+      - memecoin-logs-prod:/logs
+    restart: "no"
+    command: |
+      sh -c "
+        while true; do
+          echo 'Rotating logs...'
+          find /logs -name '*.log' -size +100M -exec gzip {} \;
+          find /logs -name '*.gz' -mtime +7 -delete
+          
+          echo 'Log rotation completed, sleeping for 1 hour...'
+          sleep 3600
+        done
+      "
+
+  # Optional: Reverse proxy with SSL termination
+  traefik:
+    image: traefik:v2.10
+    container_name: memecoin-traefik
+    command:
+      - "--api.dashboard=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.email=your-email@domain.com"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"  # Traefik dashboard
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - memecoin-letsencrypt:/letsencrypt
+    networks:
+      - memecoin-network
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik.rule=Host(`traefik.yourdomain.com`)"
+      - "traefik.http.routers.traefik.tls=true"
+      - "traefik.http.routers.traefik.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.traefik.service=api@internal"
+
+  # Optional: Monitoring with Prometheus and Grafana
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: memecoin-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - memecoin-prometheus:/prometheus
+    networks:
+      - memecoin-network
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.prometheus.rule=Host(`prometheus.yourdomain.com`)"
+      - "traefik.http.routers.prometheus.tls=true"
+      - "traefik.http.routers.prometheus.tls.certresolver=letsencrypt"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: memecoin-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - memecoin-grafana:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_USERS_ALLOW_SIGN_UP=false
+    networks:
+      - memecoin-network
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.grafana.rule=Host(`grafana.yourdomain.com`)"
+      - "traefik.http.routers.grafana.tls=true"
+      - "traefik.http.routers.grafana.tls.certresolver=letsencrypt"
+
+volumes:
+  memecoin-db-prod:
+    driver: local
+  memecoin-logs-prod:
+    driver: local
+  memecoin-backups:
+    driver: local
+  memecoin-letsencrypt:
+    driver: local
+  memecoin-prometheus:
+    driver: local
+  memecoin-grafana:
+    driver: local
+
+networks:
+  memecoin-network:
+    driver: bridge
