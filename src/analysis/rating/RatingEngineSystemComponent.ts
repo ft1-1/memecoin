@@ -10,11 +10,13 @@ import { Logger } from 'winston';
 import { EventEmitter } from 'events';
 import { RatingEngine, RatingEngineConfig } from './RatingEngine';
 import { SystemComponent, ComponentHealth } from '../../orchestrator/SystemOrchestrator';
+import { DatabaseManager } from '../../database/DatabaseManager';
 
 export interface RatingEngineComponentConfig {
   ratingConfig: Partial<RatingEngineConfig>;
   healthCheckInterval?: number;
   name?: string;
+  databaseManager?: DatabaseManager | undefined;
 }
 
 /**
@@ -66,8 +68,8 @@ export class RatingEngineSystemComponent extends EventEmitter implements SystemC
       // Validate configuration
       this.validateConfiguration();
 
-      // Create the rating engine instance
-      this.engine = new RatingEngine(this.config.ratingConfig);
+      // Create the rating engine instance with database manager
+      this.engine = new RatingEngine(this.config.ratingConfig, this.config.databaseManager);
 
       // Set up event forwarding
       this.setupEventForwarding();
@@ -440,9 +442,14 @@ export class RatingEngineSystemComponent extends EventEmitter implements SystemC
  */
 export function createRatingEngineSystemComponent(
   config: RatingEngineComponentConfig,
-  logger: Logger
+  logger: Logger,
+  databaseManager?: DatabaseManager | undefined
 ): RatingEngineSystemComponent {
-  return new RatingEngineSystemComponent(config, logger);
+  const configWithDb: RatingEngineComponentConfig = {
+    ...config,
+    databaseManager: databaseManager || config.databaseManager
+  };
+  return new RatingEngineSystemComponent(configWithDb, logger);
 }
 
 /**
@@ -450,7 +457,8 @@ export function createRatingEngineSystemComponent(
  */
 export function createMemecoinRatingEngineSystemComponent(
   ratingConfig: Partial<RatingEngineConfig>,
-  logger: Logger
+  logger: Logger,
+  databaseManager?: DatabaseManager | undefined
 ): RatingEngineSystemComponent {
   const config: RatingEngineComponentConfig = {
     ratingConfig: {
@@ -458,7 +466,9 @@ export function createMemecoinRatingEngineSystemComponent(
         technical: 0.4,  // 40% weight - Technical indicators
         momentum: 0.3,   // 30% weight - Momentum analysis  
         volume: 0.2,     // 20% weight - Volume analysis
-        risk: 0.1        // 10% weight - Risk assessment
+        risk: 0.1,       // 10% weight - Risk assessment
+        multiTimeframe: 0.0, // Will be set by RatingEngine defaults
+        consecutiveMomentum: 0.0 // Will be set by RatingEngine defaults
       },
       adaptiveWeighting: true,
       riskAdjustment: true,
@@ -468,6 +478,7 @@ export function createMemecoinRatingEngineSystemComponent(
     },
     healthCheckInterval: 30000, // 30 seconds
     name: 'MemecoinRatingEngine',
+    databaseManager
   };
 
   return new RatingEngineSystemComponent(config, logger);

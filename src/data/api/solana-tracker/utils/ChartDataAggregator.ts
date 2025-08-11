@@ -8,7 +8,7 @@ import { OHLCV } from '../types';
 import { Logger } from 'winston';
 
 export interface TimeframeConfig {
-  timeframe: '1h' | '4h';
+  timeframe: '5m' | '15m' | '1h' | '4h';
   minutes: number;
   maxDataPoints: number;
   hoursToFetch: number;
@@ -40,20 +40,20 @@ export const TIMEFRAME_CONFIGS: Record<string, TimeframeConfig> = {
   '5m': {
     timeframe: '5m',
     minutes: 5,
-    maxDataPoints: 120, // 2 hours of 5m candles (120 * 5m = 10 hours max)
-    hoursToFetch: 2,
+    maxDataPoints: 288, // 24 hours of 5m candles (288 * 5m = 24 hours)
+    hoursToFetch: 24,
   },
   '15m': {
     timeframe: '15m',
     minutes: 15,
-    maxDataPoints: 24, // 6 hours of 15m candles (24 * 15m = 6 hours)
-    hoursToFetch: 6,
+    maxDataPoints: 96, // 24 hours of 15m candles (96 * 15m = 24 hours)
+    hoursToFetch: 24,
   },
   '1h': {
     timeframe: '1h',
     minutes: 60,
-    maxDataPoints: 24, // 24 hours of 1h candles
-    hoursToFetch: 24,
+    maxDataPoints: 48, // 48 hours of 1h candles for better trend analysis
+    hoursToFetch: 48,
   },
   '4h': {
     timeframe: '4h',
@@ -71,7 +71,7 @@ export class ChartDataAggregator {
    */
   public aggregateTimeframe(
     oneMinuteData: OHLCV[],
-    targetTimeframe: '1h' | '4h',
+    targetTimeframe: '5m' | '15m' | '1h' | '4h',
     minDataPoints: number = 10
   ): AggregationResult {
     const config = TIMEFRAME_CONFIGS[targetTimeframe];
@@ -159,8 +159,8 @@ export class ChartDataAggregator {
       aggregationTimestamp: new Date().toISOString(),
     };
 
-    // Aggregate each timeframe (only 1h and 4h for efficiency)
-    (['1h', '4h'] as const).forEach(timeframe => {
+    // Aggregate all required timeframes for comprehensive analysis
+    (['5m', '15m', '1h', '4h'] as const).forEach(timeframe => {
       try {
         results[timeframe] = this.aggregateTimeframe(oneMinuteData, timeframe, minDataPoints);
       } catch (error) {
@@ -204,19 +204,19 @@ export class ChartDataAggregator {
     warnings: string[]
   ): OHLCV[][] {
     const buckets: OHLCV[][] = [];
-    const intervalMs = intervalMinutes * 60 * 1000;
+    const intervalSeconds = intervalMinutes * 60; // Convert to seconds for Unix timestamps
     
     if (sortedData.length === 0) return buckets;
 
     // Find the first aligned timestamp (round down to interval boundary)
     const firstTimestamp = sortedData[0].timestamp;
-    const alignedStart = Math.floor(firstTimestamp / intervalMs) * intervalMs;
+    const alignedStart = Math.floor(firstTimestamp / intervalSeconds) * intervalSeconds;
     
     let currentBucketStart = alignedStart;
     let currentBucket: OHLCV[] = [];
     
     for (const dataPoint of sortedData) {
-      const bucketEnd = currentBucketStart + intervalMs;
+      const bucketEnd = currentBucketStart + intervalSeconds;
       
       // Check if this data point belongs to the current bucket
       if (dataPoint.timestamp >= currentBucketStart && dataPoint.timestamp < bucketEnd) {
@@ -228,11 +228,11 @@ export class ChartDataAggregator {
         }
         
         // Find the correct bucket for this data point
-        const correctBucketStart = Math.floor(dataPoint.timestamp / intervalMs) * intervalMs;
+        const correctBucketStart = Math.floor(dataPoint.timestamp / intervalSeconds) * intervalSeconds;
         
         // Check for gaps in data
         if (correctBucketStart > bucketEnd) {
-          const missedBuckets = Math.floor((correctBucketStart - bucketEnd) / intervalMs);
+          const missedBuckets = Math.floor((correctBucketStart - bucketEnd) / intervalSeconds);
           if (missedBuckets > 0) {
             warnings.push(`Data gap detected: ${missedBuckets} ${intervalMinutes}m intervals missing`);
           }
@@ -403,7 +403,7 @@ export class ChartDataAggregator {
   /**
    * Get time range requirements for fetching different timeframes
    */
-  public static getTimeRangeForTimeframe(timeframe: '1h' | '4h'): {
+  public static getTimeRangeForTimeframe(timeframe: '5m' | '15m' | '1h' | '4h'): {
     hoursNeeded: number;
     fromTimestamp: number;
     toTimestamp: number;
@@ -421,6 +421,57 @@ export class ChartDataAggregator {
       hoursNeeded,
       fromTimestamp: Math.floor(fromTimestamp / 1000), // Convert to Unix timestamp
       toTimestamp: Math.floor(now / 1000),
+    };
+  }
+
+  /**
+   * Get optimal time range for fetching 1m data to cover all target timeframes
+   * This method calculates the maximum time range needed to aggregate all required timeframes
+   */
+  public static getOptimalOneMinuteDataRange(targetTimeframes: ('5m' | '15m' | '1h' | '4h')[]): {
+    hoursNeeded: number;
+    fromTimestamp: number;
+    toTimestamp: number;
+    sourceDataPoints: number;
+    coverage: Record<string, { hoursNeeded: number; maxDataPoints: number }>;
+  } {
+    if (targetTimeframes.length === 0) {
+      throw new Error('At least one target timeframe must be specified');
+    }
+
+    // Find the maximum hours needed across all timeframes
+    let maxHoursNeeded = 0;
+    const coverage: Record<string, { hoursNeeded: number; maxDataPoints: number }> = {};
+
+    for (const timeframe of targetTimeframes) {
+      const config = TIMEFRAME_CONFIGS[timeframe];
+      if (!config) {
+        throw new Error(`Unsupported timeframe: ${timeframe}`);
+      }
+      
+      maxHoursNeeded = Math.max(maxHoursNeeded, config.hoursToFetch);
+      coverage[timeframe] = {
+        hoursNeeded: config.hoursToFetch,
+        maxDataPoints: config.maxDataPoints,
+      };
+    }
+
+    // Add buffer for early movement detection (especially for 5m/15m)
+    const bufferHours = Math.min(12, maxHoursNeeded * 0.25); // 25% buffer, max 12 hours
+    const totalHoursNeeded = maxHoursNeeded + bufferHours;
+
+    const now = Date.now();
+    const fromTimestamp = now - (totalHoursNeeded * 60 * 60 * 1000);
+    
+    // Calculate expected source data points (1-minute intervals)
+    const sourceDataPoints = Math.ceil(totalHoursNeeded * 60);
+
+    return {
+      hoursNeeded: totalHoursNeeded,
+      fromTimestamp: Math.floor(fromTimestamp / 1000), // Convert to Unix timestamp
+      toTimestamp: Math.floor(now / 1000),
+      sourceDataPoints,
+      coverage,
     };
   }
 }

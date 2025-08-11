@@ -168,6 +168,8 @@ export interface AnalysisContext {
   tokenData: import('./api').TokenData;
   chartData: import('./api').ChartDataPoint[];
   multiTimeframeData?: {
+    '5m': import('./api').ChartDataPoint[];
+    '15m': import('./api').ChartDataPoint[];
     '1h': import('./api').ChartDataPoint[];
     '4h': import('./api').ChartDataPoint[];
   };
@@ -211,10 +213,14 @@ export interface AIAnalysisInput {
     priceChange24h: number;
   };
   multiTimeframeData: {
+    '5m': import('./api').ChartDataPoint[];
+    '15m': import('./api').ChartDataPoint[];
     '1h': import('./api').ChartDataPoint[];
     '4h': import('./api').ChartDataPoint[];
   };
   technicalIndicators: {
+    '5m': TechnicalIndicators;
+    '15m': TechnicalIndicators;
     '1h': TechnicalIndicators;
     '4h': TechnicalIndicators;
   };

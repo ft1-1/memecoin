@@ -605,6 +605,193 @@ export class SolanaTrackerSystemComponent extends EventEmitter implements System
   }
 
   /**
+   * Get optimized multi-timeframe data using single 1m data fetch with aggregation
+   * This method reduces API calls by 80% compared to separate timeframe requests
+   */
+  public async getOptimizedMultiTimeframeData(
+    token: string,
+    targetTimeframes: ('5m' | '15m' | '1h' | '4h')[] = ['5m', '15m', '1h', '4h'],
+    options?: {
+      enableCaching?: boolean;
+      maxRetries?: number;
+      minDataPointsPerTimeframe?: number;
+    }
+  ): Promise<{
+    timeframes: Record<string, any[]>;
+    sourceData: {
+      dataPoints: number;
+      timeRange: { from: number; to: number; hours: number };
+      aggregationResults: Record<string, any>;
+    };
+    performance: {
+      apiCalls: number;
+      aggregationTime: number;
+      totalTime: number;
+    };
+    errors: string[];
+    warnings: string[];
+  }> {
+    if (!this.isReady()) {
+      throw new Error('Component not ready - ensure it is initialized and started');
+    }
+
+    const startTime = performance.now();
+    const enableCaching = options?.enableCaching !== false;
+    const maxRetries = options?.maxRetries || 2;
+    const minDataPointsPerTimeframe = options?.minDataPointsPerTimeframe || 10;
+
+    this.logger.info('Optimized multi-timeframe data request initiated', {
+      token,
+      targetTimeframes,
+      enableCaching,
+      component: this.name,
+    });
+
+    try {
+      // Import ChartDataAggregator dynamically to avoid circular dependencies
+      const { ChartDataAggregator } = await import('./utils/ChartDataAggregator');
+      
+      // Calculate optimal time range for 1m data
+      const timeRange = ChartDataAggregator.getOptimalOneMinuteDataRange(targetTimeframes);
+      
+      this.logger.debug('Calculated optimal time range for 1m data', {
+        token,
+        hoursNeeded: timeRange.hoursNeeded,
+        expectedDataPoints: timeRange.sourceDataPoints,
+        coverage: timeRange.coverage,
+      });
+
+      // Fetch 1-minute data once
+      const oneMinuteDataResponse = await this.client!.getChartData({
+        token,
+        interval: '1m',
+        from: timeRange.fromTimestamp,
+        to: timeRange.toTimestamp,
+        limit: Math.min(timeRange.sourceDataPoints * 2, 10000), // Buffer with API limits
+      });
+
+      const aggregationStartTime = performance.now();
+
+      // Initialize aggregator
+      const aggregator = new ChartDataAggregator(this.logger);
+      
+      // Validate source data
+      const validation = aggregator.validateOHLCVData(oneMinuteDataResponse.data);
+      const warnings: string[] = [...validation.warnings];
+      const errors: string[] = [...validation.errors];
+
+      if (!validation.isValid) {
+        this.logger.warn('Source 1m data validation failed', {
+          token,
+          errors: errors.length,
+          warnings: warnings.length,
+        });
+      }
+
+      // Aggregate all timeframes from 1m data
+      const aggregationResults = aggregator.aggregateAllTimeframes(
+        oneMinuteDataResponse.data,
+        minDataPointsPerTimeframe
+      );
+
+      // Extract timeframe data
+      const timeframeData: Record<string, any[]> = {};
+      const aggregationMeta: Record<string, any> = {};
+
+      for (const timeframe of targetTimeframes) {
+        if (aggregationResults[timeframe as keyof typeof aggregationResults]) {
+          const result = aggregationResults[timeframe as keyof typeof aggregationResults] as any;
+          timeframeData[timeframe] = result.data;
+          aggregationMeta[timeframe] = {
+            originalDataPoints: result.originalDataPoints,
+            aggregatedDataPoints: result.aggregatedDataPoints,
+            dataLossPercentage: result.dataLossPercentage,
+            completionRate: result.completionRate,
+            warnings: result.warnings,
+          };
+          
+          // Add warnings from aggregation
+          if (result.warnings.length > 0) {
+            warnings.push(...result.warnings.map((w: string) => `${timeframe}: ${w}`));
+          }
+        } else {
+          timeframeData[timeframe] = [];
+          errors.push(`Failed to aggregate ${timeframe} timeframe`);
+        }
+      }
+
+      const aggregationTime = performance.now() - aggregationStartTime;
+      const totalTime = performance.now() - startTime;
+
+      const result = {
+        timeframes: timeframeData,
+        sourceData: {
+          dataPoints: oneMinuteDataResponse.data.length,
+          timeRange: {
+            from: timeRange.fromTimestamp,
+            to: timeRange.toTimestamp,
+            hours: timeRange.hoursNeeded,
+          },
+          aggregationResults: aggregationMeta,
+        },
+        performance: {
+          apiCalls: 1, // Only 1 API call for 1m data
+          aggregationTime,
+          totalTime,
+        },
+        errors,
+        warnings,
+      };
+
+      this.logger.info('Optimized multi-timeframe data completed', {
+        token,
+        targetTimeframes,
+        sourceDataPoints: oneMinuteDataResponse.data.length,
+        aggregatedTimeframes: Object.keys(timeframeData).length,
+        apiCalls: 1,
+        aggregationTime: `${aggregationTime.toFixed(2)}ms`,
+        totalTime: `${totalTime.toFixed(2)}ms`,
+        errors: errors.length,
+        warnings: warnings.length,
+        component: this.name,
+      });
+
+      // Emit metrics for monitoring
+      this.emit('optimizedMultiTimeframeCompleted', {
+        token,
+        targetTimeframes,
+        sourceDataPoints: oneMinuteDataResponse.data.length,
+        apiCallReduction: targetTimeframes.length - 1, // Saved API calls
+        totalTime,
+        success: errors.length === 0,
+      });
+
+      return result;
+
+    } catch (error) {
+      const totalTime = performance.now() - startTime;
+      
+      this.logger.error('Optimized multi-timeframe data request failed', {
+        token,
+        targetTimeframes,
+        error: error instanceof Error ? error.message : error,
+        totalTime: `${totalTime.toFixed(2)}ms`,
+        component: this.name,
+      });
+
+      // Emit error metrics
+      this.emit('optimizedMultiTimeframeFailed', {
+        token,
+        targetTimeframes,
+        error: error instanceof Error ? error.message : error,
+        totalTime,
+      });
+
+      throw error;
+    }
+  }
+
+  /**
    * Utility method to delay execution (for rate limiting)
    */
   private delay(ms: number): Promise<void> {

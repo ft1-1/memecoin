@@ -100,7 +100,7 @@ export interface EntrySignalConfig {
 export class EntrySignalGenerator {
   private logger = Logger.getInstance();
   private volumeAnalyzer: VolumeAnalyzer;
-  private momentumTracker: MomentumAccelerationTracker;
+  private momentumTrackers: Map<number, MomentumAccelerationTracker> = new Map(); // Interval -> Tracker
   private ratingEngine: RatingEngine;
   private multiTimeframeAnalyzer: MultiTimeframeAnalyzer;
   private config: EntrySignalConfig;
@@ -150,7 +150,9 @@ export class EntrySignalGenerator {
       volumePeriods: [10, 20, 50]
     });
     
-    this.momentumTracker = new MomentumAccelerationTracker();
+    // Create default momentum tracker (5-minute intervals)
+    this.momentumTrackers.set(5, new MomentumAccelerationTracker(undefined, 5));
+    
     this.ratingEngine = ratingEngine || new RatingEngine();
     this.multiTimeframeAnalyzer = new MultiTimeframeAnalyzer();
   }
@@ -322,11 +324,68 @@ export class EntrySignalGenerator {
   }
 
   /**
+   * Get or create a momentum tracker for a specific interval
+   */
+  private getMomentumTrackerForInterval(intervalMinutes: number): MomentumAccelerationTracker {
+    if (!this.momentumTrackers.has(intervalMinutes)) {
+      this.logger.debug(`Creating new momentum tracker for ${intervalMinutes}-minute interval`);
+      this.momentumTrackers.set(intervalMinutes, 
+        new MomentumAccelerationTracker(undefined, intervalMinutes)
+      );
+    }
+    return this.momentumTrackers.get(intervalMinutes)!;
+  }
+
+  /**
+   * Detect interval from OHLCV data
+   */
+  private detectInterval(ohlcvData: OHLCV[]): number {
+    if (ohlcvData.length < 2) {
+      return 5; // Default to 5-minute intervals
+    }
+
+    // Calculate time difference between consecutive candles
+    const timestamps = ohlcvData
+      .slice(0, Math.min(10, ohlcvData.length))
+      .map(d => d.timestamp)
+      .sort((a, b) => a - b);
+
+    if (timestamps.length < 2) {
+      return 5;
+    }
+
+    // Calculate average interval in minutes
+    const intervals = [];
+    for (let i = 1; i < timestamps.length; i++) {
+      intervals.push((timestamps[i] - timestamps[i-1]) / (1000 * 60));
+    }
+
+    const avgInterval = intervals.reduce((sum, interval) => sum + interval, 0) / intervals.length;
+    
+    // Round to nearest common interval (1, 5, 15, 60, 240 minutes)
+    const commonIntervals = [1, 5, 15, 60, 240];
+    const detectedInterval = commonIntervals.reduce((prev, curr) => 
+      Math.abs(curr - avgInterval) < Math.abs(prev - avgInterval) ? curr : prev
+    );
+
+    this.logger.debug(`Detected interval: ${detectedInterval} minutes from data`, {
+      avgInterval: avgInterval.toFixed(2),
+      sampleSize: intervals.length
+    });
+
+    return detectedInterval;
+  }
+
+  /**
    * Analyze momentum acceleration
    */
   private analyzeMomentumAcceleration(ohlcvData: OHLCV[]): SignalComponents['momentumAcceleration'] {
     try {
-      const momentum = this.momentumTracker.analyzeMomentum(ohlcvData);
+      // Detect interval and get appropriate tracker
+      const intervalMinutes = this.detectInterval(ohlcvData);
+      const tracker = this.getMomentumTrackerForInterval(intervalMinutes);
+      
+      const momentum = tracker.analyzeMomentum(ohlcvData);
       
       // Calculate momentum score
       let score = 0;

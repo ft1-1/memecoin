@@ -221,7 +221,8 @@ class MemecoinAnalyzerApp {
         multiTimeframeAnalysis: config.analysis?.multiTimeframeAnalysis ?? true,
         exhaustionDetection: config.analysis?.exhaustionDetection ?? true,
       },
-      this.logger.child({ component: 'RatingEngine' })
+      this.logger.child({ component: 'RatingEngine' }),
+      historicalDataManager.getDatabaseManager() // Pass DatabaseManager for consecutive momentum persistence
     );
     componentManager.registerComponent('rating-engine', ratingEngine, ['historical-data'], 3);
 

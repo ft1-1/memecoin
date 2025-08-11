@@ -1,4 +1,4 @@
-import { OHLCV } from '../../types/market';
+import { OHLCV } from '../../data/api/solana-tracker/types';
 
 /**
  * Represents the fatigue level of momentum
@@ -120,7 +120,7 @@ export interface MomentumConfig {
  * Default configuration for momentum tracking
  */
 const DEFAULT_CONFIG: MomentumConfig = {
-  minDataPoints: 48, // 4 hours of 5-minute data
+  minDataPoints: 48, // 4 hours of 5-minute data (will be adjusted based on interval)
   velocityWindows: {
     short: 60, // 1 hour
     medium: 240, // 4 hours
@@ -145,16 +145,22 @@ const DEFAULT_CONFIG: MomentumConfig = {
  */
 export class MomentumAccelerationTracker {
   private config: MomentumConfig;
+  private intervalMinutes: number;
 
-  constructor(config: Partial<MomentumConfig> = {}) {
+  constructor(config: Partial<MomentumConfig> = {}, intervalMinutes: number = 5) {
     this.config = { ...DEFAULT_CONFIG, ...config };
+    this.intervalMinutes = intervalMinutes;
   }
 
   /**
    * Analyze momentum acceleration for a token
    */
   public analyzeMomentum(ohlcvData: OHLCV[]): MomentumAcceleration {
-    if (ohlcvData.length < this.config.minDataPoints) {
+    // Adjust minimum data points based on actual interval
+    const adjustedMinDataPoints = Math.floor((4 * 60) / this.intervalMinutes); // 4 hours worth of data
+    const minDataPoints = Math.max(this.config.minDataPoints, adjustedMinDataPoints);
+    
+    if (ohlcvData.length < minDataPoints) {
       // Graceful degradation for insufficient data
       return this.createMinimalMomentumAnalysis(ohlcvData);
     }
@@ -223,14 +229,16 @@ export class MomentumAccelerationTracker {
    */
   private calculateVelocityMetrics(sortedData: OHLCV[]) {
     const current1h = this.calculateVelocity(sortedData, this.config.velocityWindows.short);
+    const candlesToSkip1h = Math.floor(this.config.velocityWindows.short / this.intervalMinutes);
     const previous1h = this.calculateVelocity(
-      sortedData.slice(12), // Skip 1 hour of data (12 * 5min)
+      sortedData.slice(candlesToSkip1h), // Skip 1 hour of data based on actual interval
       this.config.velocityWindows.short
     );
     
     const current4h = this.calculateVelocity(sortedData, this.config.velocityWindows.medium);
+    const candlesToSkip4h = Math.floor(this.config.velocityWindows.medium / this.intervalMinutes);
     const previous4h = this.calculateVelocity(
-      sortedData.slice(48), // Skip 4 hours of data
+      sortedData.slice(candlesToSkip4h), // Skip 4 hours of data based on actual interval
       this.config.velocityWindows.medium
     );
 
@@ -388,13 +396,13 @@ export class MomentumAccelerationTracker {
    */
   
   private findPriceAtInterval(sortedData: OHLCV[], intervalMinutes: number): number | null {
-    // Assuming 5-minute candles
-    const candlesBack = Math.floor(intervalMinutes / 5);
+    // Use the actual candle interval instead of hardcoded 5 minutes
+    const candlesBack = Math.floor(intervalMinutes / this.intervalMinutes);
     return sortedData[candlesBack]?.close || null;
   }
 
   private calculateVelocity(data: OHLCV[], windowMinutes: number): number {
-    const candlesInWindow = Math.floor(windowMinutes / 5);
+    const candlesInWindow = Math.floor(windowMinutes / this.intervalMinutes);
     if (data.length < candlesInWindow) return 0;
 
     const startPrice = data[candlesInWindow - 1].close;
@@ -485,13 +493,23 @@ export class MomentumAccelerationTracker {
     const recentCandles = sortedData.slice(0, 12);
     const volatility = recentCandles.reduce((sum, candle) => 
       sum + (candle.high - candle.low) / candle.open, 0) / recentCandles.length;
-    const priceStability = Math.max(0, 100 - (volatility * 1000)); // Scale volatility
+    let priceStability = Math.max(0, 100 - (volatility * 1000)); // Scale volatility
+
+    // Adjust price stability based on candle metrics
+    if (candleMetrics.consecutiveStreak >= 5) {
+      priceStability *= 1.1; // Bonus for consistent directional movement
+    }
+    
+    // Adjust based on candle strength
+    if (candleMetrics.averageCandleSize > 0.02) { // Large candles indicate strong moves
+      priceStability *= 0.9; // Slight penalty for high volatility
+    }
 
     return {
       velocityConsistency,
       accelerationTrend,
       volumeSupport,
-      priceStability,
+      priceStability: Math.min(100, priceStability), // Cap at 100
     };
   }
 
@@ -572,7 +590,7 @@ export class MomentumAccelerationTracker {
       
       return {
         count: direction !== 'neutral' ? 1 : 0,
-        direction,
+        direction: direction as 'bullish' | 'bearish' | 'neutral',
         weightedStrength: Math.min(strength, 20)
       };
     }
@@ -607,7 +625,7 @@ export class MomentumAccelerationTracker {
 
     return {
       count: consecutiveCount,
-      direction,
+      direction: direction as 'bullish' | 'bearish' | 'neutral',
       weightedStrength: Math.min(weightedStrength, 50) // Cap for limited data
     };
   }
@@ -616,8 +634,8 @@ export class MomentumAccelerationTracker {
 /**
  * Factory function to create a momentum acceleration tracker
  */
-export function createMomentumAccelerationTracker(config?: Partial<MomentumConfig>): MomentumAccelerationTracker {
-  return new MomentumAccelerationTracker(config);
+export function createMomentumAccelerationTracker(config?: Partial<MomentumConfig>, intervalMinutes: number = 5): MomentumAccelerationTracker {
+  return new MomentumAccelerationTracker(config, intervalMinutes);
 }
 
 /**

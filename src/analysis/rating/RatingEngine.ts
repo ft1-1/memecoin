@@ -65,9 +65,9 @@ export class RatingEngine {
   
   private config: RatingEngineConfig;
   private historicalRatings: Map<string, RatingResult[]> = new Map();
-  private dbManager?: DatabaseManager;
+  private dbManager?: DatabaseManager | undefined;
 
-  constructor(config?: Partial<RatingEngineConfig>, dbManager?: DatabaseManager) {
+  constructor(config?: Partial<RatingEngineConfig>, dbManager?: DatabaseManager | undefined) {
     // Momentum-focused weighting strategy for mid-cap memecoin trading:
     // Volume is prioritized as the primary momentum indicator since volume surges
     // typically precede and confirm price movements in memecoin markets.
@@ -92,7 +92,7 @@ export class RatingEngine {
       ...config
     };
 
-    this.dbManager = dbManager;
+    this.dbManager = dbManager || undefined;
 
     // Initialize calculators with optimized parameters
     this.technicalCalculator = new TechnicalScoreCalculator();

@@ -7,19 +7,20 @@
 
 import { Logger } from '../../utils/Logger';
 import { MomentumAccelerationTracker, MomentumAcceleration, MomentumConfig } from './MomentumAccelerationTracker';
-import { OHLCV } from '../../types/market';
+import { OHLCV } from '../../data/api/solana-tracker/types';
 import { SystemComponent, ComponentHealth } from '../../orchestrator/SystemOrchestrator';
 
 export interface MomentumAccelerationSystemComponentConfig {
   momentumConfig?: Partial<MomentumConfig>;
   enabled?: boolean;
   cacheDurationMs?: number;
+  defaultIntervalMinutes?: number; // Default interval in minutes for analysis
 }
 
 export class MomentumAccelerationSystemComponent implements SystemComponent {
   public readonly name: string = 'MomentumAcceleration';
   private logger: Logger;
-  private tracker: MomentumAccelerationTracker;
+  private trackers: Map<number, MomentumAccelerationTracker> = new Map(); // Interval -> Tracker
   private config: MomentumAccelerationSystemComponentConfig;
   private isInitialized = false;
   private isStarted = false;
@@ -29,11 +30,15 @@ export class MomentumAccelerationSystemComponent implements SystemComponent {
     this.config = {
       enabled: true,
       cacheDurationMs: 5 * 60 * 1000, // 5 minutes cache
+      defaultIntervalMinutes: 5, // Default to 5-minute intervals
       ...config
     };
     
     this.logger = logger || Logger.getInstance();
-    this.tracker = new MomentumAccelerationTracker(config.momentumConfig);
+    // Create default tracker with default interval
+    this.trackers.set(this.config.defaultIntervalMinutes!, 
+      new MomentumAccelerationTracker(config.momentumConfig, this.config.defaultIntervalMinutes)
+    );
   }
 
   /**
@@ -168,7 +173,60 @@ export class MomentumAccelerationSystemComponent implements SystemComponent {
    * Check if component is ready
    */
   isReady(): boolean {
-    return this.isInitialized && this.isStarted && this.config.enabled;
+    return this.isInitialized && this.isStarted && (this.config.enabled ?? false);
+  }
+
+  /**
+   * Get or create a tracker for a specific interval
+   */
+  private getTrackerForInterval(intervalMinutes: number): MomentumAccelerationTracker {
+    if (!this.trackers.has(intervalMinutes)) {
+      this.logger.debug(`Creating new momentum tracker for ${intervalMinutes}-minute interval`);
+      this.trackers.set(intervalMinutes, 
+        new MomentumAccelerationTracker(this.config.momentumConfig, intervalMinutes)
+      );
+    }
+    return this.trackers.get(intervalMinutes)!;
+  }
+
+  /**
+   * Detect interval from OHLCV data
+   */
+  private detectInterval(ohlcvData: OHLCV[]): number {
+    if (ohlcvData.length < 2) {
+      return this.config.defaultIntervalMinutes!;
+    }
+
+    // Calculate time difference between consecutive candles
+    const timestamps = ohlcvData
+      .slice(0, Math.min(10, ohlcvData.length))
+      .map(d => d.timestamp)
+      .sort((a, b) => a - b);
+
+    if (timestamps.length < 2) {
+      return this.config.defaultIntervalMinutes!;
+    }
+
+    // Calculate average interval in minutes
+    const intervals = [];
+    for (let i = 1; i < timestamps.length; i++) {
+      intervals.push((timestamps[i] - timestamps[i-1]) / (1000 * 60));
+    }
+
+    const avgInterval = intervals.reduce((sum, interval) => sum + interval, 0) / intervals.length;
+    
+    // Round to nearest common interval (1, 5, 15, 60, 240 minutes)
+    const commonIntervals = [1, 5, 15, 60, 240];
+    const detectedInterval = commonIntervals.reduce((prev, curr) => 
+      Math.abs(curr - avgInterval) < Math.abs(prev - avgInterval) ? curr : prev
+    );
+
+    this.logger.debug(`Detected interval: ${detectedInterval} minutes from data`, {
+      avgInterval: avgInterval.toFixed(2),
+      sampleSize: intervals.length
+    });
+
+    return detectedInterval;
   }
 
   /**
@@ -176,7 +234,8 @@ export class MomentumAccelerationSystemComponent implements SystemComponent {
    */
   async analyzeMomentumAcceleration(
     tokenAddress: string,
-    ohlcvData: OHLCV[]
+    ohlcvData: OHLCV[],
+    intervalMinutes?: number
   ): Promise<MomentumAcceleration | null> {
     if (!this.isReady()) {
       this.logger.warn('Momentum Acceleration System Component not ready');
@@ -184,17 +243,26 @@ export class MomentumAccelerationSystemComponent implements SystemComponent {
     }
 
     try {
-      // Check cache first
-      const cacheKey = `${tokenAddress}-${ohlcvData.length}`;
+      // Detect or use provided interval
+      const detectedInterval = intervalMinutes || this.detectInterval(ohlcvData);
+      
+      // Check cache first (include interval in cache key)
+      const cacheKey = `${tokenAddress}-${ohlcvData.length}-${detectedInterval}min`;
       const cached = this.cache.get(cacheKey);
       
       if (cached && Date.now() - cached.timestamp < this.config.cacheDurationMs!) {
-        this.logger.debug('Momentum acceleration cache hit', { tokenAddress });
+        this.logger.debug('Momentum acceleration cache hit', { 
+          tokenAddress, 
+          interval: `${detectedInterval}min` 
+        });
         return cached.result;
       }
 
+      // Get appropriate tracker for this interval
+      const tracker = this.getTrackerForInterval(detectedInterval);
+
       // Analyze momentum acceleration
-      const result = this.tracker.analyzeMomentum(ohlcvData);
+      const result = tracker.analyzeMomentum(ohlcvData);
       
       // Cache the result
       this.cache.set(cacheKey, {
@@ -207,6 +275,7 @@ export class MomentumAccelerationSystemComponent implements SystemComponent {
 
       this.logger.debug('Momentum acceleration analysis completed', {
         tokenAddress,
+        interval: `${detectedInterval}min`,
         sustainabilityScore: result.sustainabilityScore,
         fatigueLevel: result.fatigueLevel,
         entrySignalStrength: result.entrySignalStrength
@@ -229,16 +298,23 @@ export class MomentumAccelerationSystemComponent implements SystemComponent {
    */
   async getDetailedMetrics(
     tokenAddress: string,
-    ohlcvData: OHLCV[]
+    ohlcvData: OHLCV[],
+    intervalMinutes?: number
   ): Promise<any> {
     if (!this.isReady()) {
       return null;
     }
 
     try {
+      // Detect or use provided interval
+      const detectedInterval = intervalMinutes || this.detectInterval(ohlcvData);
+      
+      // Get appropriate tracker for this interval
+      const tracker = this.getTrackerForInterval(detectedInterval);
+
       // Sort data by timestamp (newest first)
       const sortedData = [...ohlcvData].sort((a, b) => b.timestamp - a.timestamp);
-      return this.tracker.calculateDetailedMetrics(sortedData);
+      return tracker.calculateDetailedMetrics(sortedData);
       
     } catch (error) {
       this.logger.error('Failed to get detailed momentum metrics', {
@@ -277,12 +353,16 @@ export class MomentumAccelerationSystemComponent implements SystemComponent {
     cacheHitRate: number;
     isReady: boolean;
     enabled: boolean;
+    trackersCount: number;
+    intervals: number[];
   } {
     return {
       cacheSize: this.cache.size,
       cacheHitRate: 0, // Would need to track hits/misses for accurate rate
       isReady: this.isReady(),
-      enabled: this.config.enabled || false
+      enabled: this.config.enabled || false,
+      trackersCount: this.trackers.size,
+      intervals: Array.from(this.trackers.keys()).sort((a, b) => a - b)
     };
   }
 
