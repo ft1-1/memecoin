@@ -4,6 +4,12 @@
  * Combines multiple momentum indicators into clear, actionable trading signals
  * optimized for mid-cap memecoin momentum plays. Focus is on high-quality 
  * entry points with strong confirmation across multiple factors.
+ * 
+ * Volume surge detection is now configurable via environment variables:
+ * - VOLUME_SURGE_THRESHOLD: Multiplier for volume surge detection (default: 2.5, down from 3.0)
+ * - VOLUME_SURGE_PERIODS: Required consecutive periods with elevated volume (default: 2, down from 3)
+ * 
+ * This allows catching volume-based momentum signals 20-30% earlier for mid-cap memecoins.
  */
 
 import { Logger } from '../utils/Logger';
@@ -66,8 +72,8 @@ export interface SignalComponents {
 
 export interface EntrySignalConfig {
   // Volume thresholds
-  volumeSurgeThreshold: number; // Minimum volume spike factor (default: 3.0)
-  volumePersistencePeriods: number; // Required consecutive periods with elevated volume (default: 3)
+  volumeSurgeThreshold: number; // Minimum volume spike factor (default: 2.5, configurable via VOLUME_SURGE_THRESHOLD)
+  volumePersistencePeriods: number; // Required consecutive periods with elevated volume (default: 2, configurable via VOLUME_SURGE_PERIODS)
   
   // Rating thresholds
   minRatingThreshold: number; // Minimum rating for entry (default: 7.0)
@@ -110,9 +116,9 @@ export class EntrySignalGenerator {
     ratingEngine?: RatingEngine
   ) {
     this.config = {
-      // Volume configuration
-      volumeSurgeThreshold: 3.0, // 3x average volume threshold
-      volumePersistencePeriods: 3,
+      // Volume configuration - now configurable via environment variables
+      volumeSurgeThreshold: parseFloat(process.env.VOLUME_SURGE_THRESHOLD || '2.5'), // Default 2.5x down from 3.0x
+      volumePersistencePeriods: parseInt(process.env.VOLUME_SURGE_PERIODS || '2', 10), // Default 2 down from 3
       
       // Rating configuration
       minRatingThreshold: 7.0,

@@ -53,6 +53,8 @@ export interface AnalysisConfig {
   volume: {
     minVolumeUsd: number;
     volumeSpikeFactor: number;
+    // Note: Volume surge detection thresholds are configured directly in EntrySignalGenerator
+    // via VOLUME_SURGE_THRESHOLD and VOLUME_SURGE_PERIODS environment variables
   };
   aiAnalysis?: {
     enabled: boolean;
@@ -153,4 +155,7 @@ export interface EnvironmentVariables {
   CLAUDE_TIMEOUT?: string;
   CLAUDE_MAX_TOKENS?: string;
   AI_ANALYSIS_THRESHOLD?: string;
+  // Volume surge detection configuration
+  VOLUME_SURGE_THRESHOLD?: string; // Volume surge multiplier (default: 2.5)
+  VOLUME_SURGE_PERIODS?: string;   // Required consecutive periods (default: 2)
 }
