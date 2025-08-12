@@ -1,6 +1,7 @@
 import winston from 'winston';
 import DailyRotateFile from 'winston-daily-rotate-file';
 import { MonitoringConfig } from '../types/config';
+import { ConsoleFormatter, shouldUseSimpleLogging } from './ConsoleFormatter';
 
 /**
  * Singleton Logger class for application-wide logging
@@ -35,17 +36,13 @@ export class Logger {
    * Create default logger for initial use
    */
   private createDefaultLogger(): winston.Logger {
+    const useSimpleFormat = shouldUseSimpleLogging();
+    
     return winston.createLogger({
       level: 'info',
-      format: winston.format.combine(
-        winston.format.timestamp(),
-        winston.format.errors({ stack: true }),
-        winston.format.colorize(),
-        winston.format.printf(({ timestamp, level, message, ...meta }) => {
-          const metaStr = Object.keys(meta).length ? JSON.stringify(meta, null, 2) : '';
-          return `${timestamp} [${level}]: ${message} ${metaStr}`;
-        })
-      ),
+      format: useSimpleFormat 
+        ? ConsoleFormatter.createSimpleFormat()
+        : ConsoleFormatter.createDetailedFormat(),
       transports: [
         new winston.transports.Console()
       ],
@@ -62,22 +59,16 @@ export class Logger {
     const transports: winston.transport[] = [];
 
     // Console transport
+    const useSimpleFormat = shouldUseSimpleLogging();
     transports.push(
       new winston.transports.Console({
         level: logging.level,
-        format: winston.format.combine(
-          winston.format.timestamp(),
-          winston.format.errors({ stack: true }),
-          logging.format === 'json' 
-            ? winston.format.json()
-            : winston.format.combine(
-                winston.format.colorize(),
-                winston.format.printf(({ timestamp, level, message, ...meta }) => {
-                  const metaStr = Object.keys(meta).length ? JSON.stringify(meta, null, 2) : '';
-                  return `${timestamp} [${level}]: ${message} ${metaStr}`;
-                })
-              )
-        ),
+        format: logging.format === 'json' 
+          ? winston.format.json()
+          : (useSimpleFormat 
+              ? ConsoleFormatter.createSimpleFormat()
+              : ConsoleFormatter.createDetailedFormat()
+            )
       })
     );
 
@@ -113,6 +104,30 @@ export class Logger {
             winston.format.errors({ stack: true }),
             winston.format.json()
           ),
+        })
+      );
+
+      // Claude AI response log file - separate file for AI interactions
+      transports.push(
+        new DailyRotateFile({
+          level: 'info',
+          filename: `${logging.file.path}/claude-responses-%DATE%.log`,
+          datePattern: 'YYYY-MM-DD',
+          zippedArchive: true,
+          maxSize: '50m', // Larger size for full responses
+          maxFiles: 14, // Keep 2 weeks of Claude logs
+          format: winston.format.combine(
+            winston.format.timestamp(),
+            winston.format((info) => {
+              // Only log Claude-specific actions to this file
+              if (info.action === 'CLAUDE_PROMPT_SENT' || 
+                  info.action === 'CLAUDE_FULL_RESPONSE') {
+                return info; // Return the info object to continue processing
+              }
+              return false; // Filter out non-Claude logs
+            })(),
+            winston.format.json()
+          )
         })
       );
     }

@@ -414,17 +414,27 @@ export class ConfidenceCalculator {
       // Determine timeframe bias
       let timeframeBias = 0;
       
-      // RSI signals
-      if (indicators.rsi < 30) timeframeBias += 1;
-      else if (indicators.rsi > 70) timeframeBias -= 1;
+      // RSI signals (with safe property access)
+      if (typeof indicators.rsi === 'number') {
+        if (indicators.rsi < 30) timeframeBias += 1;
+        else if (indicators.rsi > 70) timeframeBias -= 1;
+      }
 
-      // MACD signals
-      if (indicators.macd.macd > indicators.macd.signal) timeframeBias += 1;
-      else if (indicators.macd.macd < indicators.macd.signal) timeframeBias -= 1;
+      // MACD signals (with safe property access)
+      if (indicators.macd && typeof indicators.macd === 'object' && 
+          'macd' in indicators.macd && 'signal' in indicators.macd &&
+          typeof indicators.macd.macd === 'number' && typeof indicators.macd.signal === 'number') {
+        if (indicators.macd.macd > indicators.macd.signal) timeframeBias += 1;
+        else if (indicators.macd.macd < indicators.macd.signal) timeframeBias -= 1;
+      }
 
-      // Bollinger position
-      if (indicators.bollinger.position < 0.3) timeframeBias += 1;
-      else if (indicators.bollinger.position > 0.7) timeframeBias -= 1;
+      // Bollinger position (with safe property access)
+      if (indicators.bollinger && typeof indicators.bollinger === 'object' && 
+          'position' in indicators.bollinger && 
+          typeof indicators.bollinger.position === 'number') {
+        if (indicators.bollinger.position < 0.3) timeframeBias += 1;
+        else if (indicators.bollinger.position > 0.7) timeframeBias -= 1;
+      }
 
       if (timeframeBias > 0) bullishSignals += weight;
       else if (timeframeBias < 0) bearishSignals += weight;

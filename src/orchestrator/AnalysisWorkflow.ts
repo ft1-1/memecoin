@@ -109,7 +109,7 @@ export class AnalysisWorkflow {
     // Initialize Claude Analyst if AI analysis is enabled
     if (config.aiAnalysis?.enabled && config.aiAnalysis.claudeConfig) {
       try {
-        this.claudeAnalyst = new ClaudeAnalyst(config.aiAnalysis.claudeConfig);
+        this.claudeAnalyst = new ClaudeAnalyst(config.aiAnalysis.claudeConfig, this.logger);
         
         // Initialize AI circuit breaker
         this.aiAnalysisCircuitBreaker = this.circuitBreakerManager.getCircuitBreaker('claude-ai-analysis', {
@@ -163,6 +163,13 @@ export class AnalysisWorkflow {
    */
   async execute(): Promise<void> {
     const workflowId = `analysis-${Date.now()}`;
+    
+    // Log cycle start
+    this.logger.info('Starting analysis cycle', {
+      activity: 'CYCLE_START',
+      cycleNumber: Date.now() // Using timestamp as cycle number
+    });
+    
     this.logger.info('Starting analysis workflow', { workflowId });
     
     try {
@@ -211,7 +218,7 @@ export class AnalysisWorkflow {
       // Note: apiClient reference removed as it was unused
       
       // 1. Fetch trending tokens with performance tracking
-      this.logger.info('Fetching trending tokens...');
+      this.logger.info('⬇️  Fetching trending tokens from Solana...');
       const trendingResponse = await this.performanceMonitor.trackOperation(
         'fetch-trending-tokens',
         () => apiClientComponent.getTrendingTokensFiltered(
@@ -294,8 +301,73 @@ export class AnalysisWorkflow {
       });
       // This section has been replaced by parallel processing above
       
+      // Show rating summary
+      this.logger.info(`\n📈 Rating Summary (showing final ratings after AI):`, {
+        activity: 'RATING_SUMMARY'
+      });
+      
+      // Sort results by rating for display
+      const sortedResults = results
+        .filter(r => r && r.rating)
+        .sort((a, b) => b.rating.rating - a.rating.rating);
+      
+      // Track rating distribution for this cycle
+      const cycleRatingDistribution: Record<number, number> = {};
+      for (let i = 0; i <= 10; i++) {
+        cycleRatingDistribution[i] = 0;
+      }
+      
+      // Display all tokens with their ratings and collect distribution data
+      sortedResults.forEach((result) => {
+        const aiUsed = result.aiAnalysis ? ' 🤖' : '';
+        const symbol = result.mappedData.tokenData.symbol;
+        const rating = result.rating.rating.toFixed(1);
+        const threshold = result.rating.rating >= this.config.minRatingThreshold;
+        
+        this.logger.info(`   ${symbol}: ${rating}/10${aiUsed}${threshold ? ' 🔔' : ''}`, {
+          activity: 'TOKEN_RATING_SUMMARY'
+        });
+        
+        // Update rating distribution for this cycle
+        const roundedRating = Math.round(result.rating.rating);
+        cycleRatingDistribution[roundedRating] = (cycleRatingDistribution[roundedRating] || 0) + 1;
+      });
+      
+      // Update cumulative rating distribution in StateManager
+      const cumulativeRatingDistribution: Record<number, number> = {};
+      for (let i = 0; i <= 10; i++) {
+        const currentCount = this.stateManager.getMetric(`rating_${i}`);
+        const newCount = currentCount + cycleRatingDistribution[i];
+        this.stateManager.incrementMetric(`rating_${i}`, cycleRatingDistribution[i]);
+        cumulativeRatingDistribution[i] = newCount;
+      }
+      
+      // Log rating distribution for this cycle
+      this.logger.info('\n📊 Cycle Rating Distribution:', {
+        activity: 'RATING_DISTRIBUTION',
+        ratingDistribution: cycleRatingDistribution,
+        isCumulative: false
+      });
+      
+      // Log cumulative rating distribution
+      const totalTokensRated = Object.values(cumulativeRatingDistribution).reduce((sum, count) => sum + count, 0);
+      this.logger.info('📊 Cumulative Rating Distribution (Total: ' + totalTokensRated + ' tokens):', {
+        activity: 'RATING_DISTRIBUTION',
+        ratingDistribution: cumulativeRatingDistribution,
+        isCumulative: true,
+        totalTokensRated
+      });
+      
       // 3. Send notifications for high-rated tokens
-      this.logger.info(`Sending notifications for ${highRatedTokens.length} high-rated tokens`);
+      if (highRatedTokens.length > 0) {
+        this.logger.info(`\n🔔 Sending notifications for ${highRatedTokens.length} tokens that scored ≥${this.config.minRatingThreshold}`, {
+          activity: 'SENDING_NOTIFICATIONS'
+        });
+      } else {
+        this.logger.info(`\n❌ No tokens reached notification threshold (≥${this.config.minRatingThreshold})`, {
+          activity: 'NO_NOTIFICATIONS'
+        });
+      }
       
       if (discordComponent && discordComponent.isReady()) {
         for (const item of highRatedTokens) {
@@ -357,10 +429,22 @@ export class AnalysisWorkflow {
               };
             }
 
+            this.logger.info(`Attempting to send Discord notification for ${mappedData.tokenData.symbol}`, {
+              tokenSymbol: mappedData.tokenData.symbol,
+              tokenAddress: mappedData.tokenData.address,
+              rating: item.rating.rating,
+              marketCap: alertData.token.marketCap
+            });
+            
             await discordComponent.sendTokenAlert(alertData);
-          
-          this.stateManager.incrementMetric('notifications_sent', 1);
-        } catch (error) {
+            
+            this.logger.info(`Successfully sent Discord notification for ${mappedData.tokenData.symbol}`, {
+              tokenSymbol: mappedData.tokenData.symbol,
+              rating: item.rating.rating
+            });
+            
+            this.stateManager.incrementMetric('notifications_sent', 1);
+          } catch (error) {
           this.logger.error(`Failed to send notification for ${item.mappedData.tokenData.symbol}`, {
             error: {
               message: error instanceof Error ? error.message : String(error),
@@ -437,6 +521,22 @@ export class AnalysisWorkflow {
       
       this.logger.info('Performance statistics', performanceStats);
       
+      // Log cycle completion with cumulative rating distribution
+      const duration = `${Math.round(totalProcessingTime / 1000)}s`;
+      const totalCycles = this.stateManager.getMetric('total_analysis_cycles') || 0;
+      this.stateManager.incrementMetric('total_analysis_cycles', 1);
+      
+      this.logger.info('Analysis cycle complete', {
+        activity: 'CYCLE_COMPLETE',
+        tokensAnalyzed: trendingResponse.tokens.length,
+        highRatedTokens: highRatedTokens.length,
+        notificationsSent: highRatedTokens.length,
+        duration: duration,
+        ratingDistribution: cumulativeRatingDistribution,
+        cycleNumber: totalCycles + 1,
+        totalTokensRated: totalTokensRated
+      });
+      
     } catch (error) {
       this.logger.error('Analysis workflow failed', {
         error: {
@@ -469,66 +569,65 @@ export class AnalysisWorkflow {
       // Map the token response data using ApiDataMapper
       const mappedData = this.dataMapper.mapCompleteTokenData(tokenResponse);
       
-      // Get multi-timeframe chart data using parallel processor with caching
-      this.logger.debug(`Fetching multi-timeframe chart data for ${mappedData.tokenData.symbol}`, {
+      // Get multi-timeframe chart data using the optimized API method
+      this.logger.debug(`Fetching optimized multi-timeframe chart data for ${mappedData.tokenData.symbol}`, {
         tokenAddress: mappedData.tokenData.address,
       });
       
       const multiTimeframeData = await this.performanceMonitor.trackOperation(
-        'fetch-multi-timeframe-data',
-        () => this.multiTimeframeProcessor.fetchMultiTimeframeData(
-          mappedData.tokenData.address,
-          ['1h', '4h'],
-          async (tokenAddr, timeframe) => {
-            // Check cache first
-            const chartCacheKey = `chart-data-${tokenAddr}-${timeframe}`;
-            let chartData = this.analysisCache.get(chartCacheKey);
-            
-            if (!chartData) {
-              chartData = await this.apiCircuitBreaker!.execute(
-                () => apiClient.getChartDataOptimized(
-                  tokenAddr,
-                  timeframe as '1h' | '4h',
-                  {
-                    maxRetries: 2,
-                    enableCaching: true,
-                    fallbackToAggregation: true
-                  }
-                ),
-                // Fallback: return empty data
-                async () => {
-                  this.logger.warn(`Chart data fallback for ${timeframe}`, { tokenAddr });
-                  return {
-                    token: tokenAddr,
-                    interval: timeframe,
-                    data: [],
-                    from: 0,
-                    to: 0,
-                    count: 0
-                  };
-                }
-              );
-              
-              // Cache chart data for 10 minutes (appropriate for 15-min cycles)
-              this.analysisCache.set(chartCacheKey, chartData, 10 * 60 * 1000);
+        'fetch-optimized-multi-timeframe-data',
+        () => this.apiCircuitBreaker!.execute(
+          () => apiClient.getOptimizedMultiTimeframeData(
+            mappedData.tokenData.address,
+            ['5m', '15m', '1h', '4h'],
+            {
+              enableCaching: true,
+              maxRetries: 2,
+              fallbackToSeparateRequests: true
             }
-            
-            return chartData.data || [];
+          ),
+          // Fallback: return minimal data structure
+          async () => {
+            this.logger.warn(`Multi-timeframe data fallback for ${mappedData.tokenData.symbol}`, { 
+              tokenAddr: mappedData.tokenData.address 
+            });
+            return {
+              timeframes: {
+                '5m': [],
+                '15m': [],
+                '1h': [],
+                '4h': []
+              },
+              fetchTime: 0,
+              totalApiCalls: 0,
+              dataPoints: 0,
+              errors: [],
+              warnings: [],
+              cacheHits: 0,
+              apiCallOptimization: {
+                traditionalCalls: 4,
+                optimizedCalls: 0,
+                reduction: '0%'
+              }
+            };
           }
         ),
         {
           tokenAddress: mappedData.tokenData.address,
-          timeframes: ['1h', '4h']
+          targetTimeframes: ['5m', '15m', '1h', '4h']
         }
       );
       
       // Log multi-timeframe fetch results
-      this.logger.info(`Multi-timeframe chart data fetched for ${mappedData.tokenData.symbol}`, {
+      this.logger.info(`Optimized multi-timeframe chart data fetched for ${mappedData.tokenData.symbol}`, {
         tokenAddress: mappedData.tokenData.address,
         availableTimeframes: Object.keys(multiTimeframeData.timeframes),
         fetchTime: multiTimeframeData.fetchTime,
+        totalApiCalls: multiTimeframeData.totalApiCalls,
+        dataPoints: multiTimeframeData.dataPoints,
         errors: multiTimeframeData.errors.length,
         warnings: multiTimeframeData.warnings.length,
+        apiCallOptimization: multiTimeframeData.apiCallOptimization
       });
       
       // Extract 1-hour data for primary analysis (most balanced for memecoin analysis)
@@ -542,32 +641,38 @@ export class AnalysisWorkflow {
         volume: point.volume
       })) : [];
       
-      // If 1h data is not available, fallback to 4h
+      // If 1h data is not available, try fallbacks in order of preference
       if (chartDataPoints.length === 0) {
-        const fallbackTimeframe = multiTimeframeData.timeframes['4h'];
-        if (fallbackTimeframe && fallbackTimeframe.length > 0) {
-          chartDataPoints.push(...fallbackTimeframe.map((point: any) => ({
-            timestamp: point.timestamp,
-            open: point.open,
-            high: point.high,
-            low: point.low,
-            close: point.close,
-            volume: point.volume
-          })));
-          
-          this.logger.info(`Using fallback timeframe data for ${mappedData.tokenData.symbol}`, {
-            tokenAddress: mappedData.tokenData.address,
-            fallbackTimeframe: '4h',
-            dataPoints: chartDataPoints.length,
-          });
+        const fallbackOrder = ['15m', '5m', '4h'];
+        for (const timeframe of fallbackOrder) {
+          const fallbackData = multiTimeframeData.timeframes[timeframe];
+          if (fallbackData && fallbackData.length > 0) {
+            chartDataPoints.push(...fallbackData.map((point: any) => ({
+              timestamp: point.timestamp,
+              open: point.open,
+              high: point.high,
+              low: point.low,
+              close: point.close,
+              volume: point.volume
+            })));
+            
+            this.logger.info(`Using fallback timeframe data for ${mappedData.tokenData.symbol}`, {
+              tokenAddress: mappedData.tokenData.address,
+              fallbackTimeframe: timeframe,
+              dataPoints: chartDataPoints.length,
+            });
+            break;
+          }
         }
       }
       
-      // Create analysis context using mapped data and multi-timeframe data
+      // Create analysis context using mapped data and all 4 timeframes
       const analysisContext: AnalysisContext = {
         tokenData: mappedData.tokenData,
         chartData: chartDataPoints,
         multiTimeframeData: {
+          '5m': multiTimeframeData.timeframes['5m'] || [],
+          '15m': multiTimeframeData.timeframes['15m'] || [],
           '1h': multiTimeframeData.timeframes['1h'] || [],
           '4h': multiTimeframeData.timeframes['4h'] || [],
         },
@@ -702,11 +807,12 @@ export class AnalysisWorkflow {
           }
         );
         
-        this.logger.info(`Initial technical rating calculated for ${mappedData.tokenData.symbol}`, {
+        this.logger.debug(`Initial technical rating calculated for ${mappedData.tokenData.symbol}: ${initialRating.rating.toFixed(1)}/10`, {
           tokenAddress: mappedData.tokenData.address,
           initialRating: initialRating.rating.toFixed(1),
           confidence: initialRating.confidence.toFixed(1),
-          recommendation: initialRating.recommendation
+          recommendation: initialRating.recommendation,
+          technical: true
         });
 
         // Perform AI analysis if enabled and rating meets threshold
@@ -768,7 +874,11 @@ export class AnalysisWorkflow {
           }
         }
         
-        this.logger.info(`Enhanced rating calculation completed for ${mappedData.tokenData.symbol}`, {
+        // Log the final rating with the number visible in the message
+        const aiInfo = aiAnalysis ? ` (AI: ${aiAnalysis.finalRecommendation.rating.toFixed(1)})` : '';
+        const notification = rating.rating >= this.config.minRatingThreshold ? ' 🔔' : '';
+        
+        this.logger.info(`📊 ${mappedData.tokenData.symbol}: ${rating.rating.toFixed(1)}/10${aiInfo}${notification} - ${rating.recommendation}`, {
           tokenAddress: mappedData.tokenData.address,
           initialRating: initialRating.rating.toFixed(1),
           finalRating: rating.rating.toFixed(1),

@@ -33,15 +33,16 @@ export interface ClaudeAnalystConfig {
 }
 
 export class ClaudeAnalyst {
-  private client: Anthropic;
-  private logger = Logger.getInstance();
+  private client?: Anthropic;
+  private logger: Logger;
   private config: ClaudeAnalystConfig;
   private requestCount = 0;
   private errorCount = 0;
   private lastRequestTime = 0;
 
-  constructor(config: ClaudeAnalystConfig) {
+  constructor(config: ClaudeAnalystConfig, logger?: Logger) {
     this.config = config;
+    this.logger = logger || Logger.getInstance();
     
     if (!config.enabled) {
       this.logger.info('Claude AI Analysis disabled in configuration');
@@ -96,6 +97,16 @@ export class ClaudeAnalyst {
 
       // Prepare analysis prompt with comprehensive data
       const prompt = this.buildAnalysisPrompt(input);
+      
+      // Log the full prompt being sent to Claude
+      this.logger.info('Sending prompt to Claude API', {
+        action: 'CLAUDE_PROMPT_SENT',
+        timestamp: new Date().toISOString(),
+        tokenSymbol: input.tokenData.symbol,
+        tokenAddress: input.tokenData.address,
+        promptLength: prompt.length,
+        fullPrompt: prompt
+      });
       
       // Call Claude API with retries
       const response = await this.callClaudeWithRetries(prompt);
@@ -312,7 +323,7 @@ Focus on sustainable technical momentum using 1h and 4h timeframes. Prioritize t
       try {
         this.logger.debug(`Claude API call attempt ${attempt}/${this.config.maxRetries}`);
         
-        const response = await this.client.messages.create({
+        const response = await this.client!.messages.create({
           model: this.config.model,
           max_tokens: this.config.maxTokens,
           temperature: this.config.temperature,
@@ -323,7 +334,21 @@ Focus on sustainable technical momentum using 1h and 4h timeframes. Prioritize t
         });
 
         if (response.content[0].type === 'text') {
-          return response.content[0].text;
+          const responseText = response.content[0].text;
+          
+          // Log full Claude response
+          this.logger.info('Claude API full response received', {
+            action: 'CLAUDE_FULL_RESPONSE',
+            timestamp: new Date().toISOString(),
+            model: this.config.model,
+            attempt,
+            responseLength: responseText.length,
+            fullResponse: responseText,
+            usage: response.usage,
+            requestId: response.id
+          });
+          
+          return responseText;
         } else {
           throw new Error('Unexpected response format from Claude API');
         }

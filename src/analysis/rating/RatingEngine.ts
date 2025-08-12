@@ -172,6 +172,31 @@ export class RatingEngine {
   }
   
   /**
+   * Check if multi-timeframe data contains calculated indicators or raw chart data
+   */
+  private hasValidMultiTimeframeIndicators(multiTimeframeData: any): boolean {
+    if (!multiTimeframeData || typeof multiTimeframeData !== 'object') {
+      return false;
+    }
+
+    // Check if any timeframe contains indicators instead of raw chart data
+    for (const [, data] of Object.entries(multiTimeframeData)) {
+      // If data is an array, it's likely raw chart data points
+      if (Array.isArray(data)) {
+        return false;
+      }
+      
+      // If data is an object with indicator properties, it's likely calculated indicators
+      if (data && typeof data === 'object' && 
+          ('rsi' in data || 'macd' in data || 'bollinger' in data)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
    * Perform the actual rating calculation with detailed step-by-step logging
    */
   private async performRatingCalculation(
@@ -246,34 +271,55 @@ export class RatingEngine {
     let multiTimeframeResult = null;
     let consecutiveMomentumResult = null;
     let exhaustionPenaltyResult = null;
+    
+    // Prepare multi-timeframe data for calculations (only if it contains calculated indicators)
+    const multiTimeframeForConfidence = this.hasValidMultiTimeframeIndicators(safeContext.multiTimeframeData) 
+      ? safeContext.multiTimeframeData as any 
+      : undefined;
 
     // Calculate multi-timeframe score if enabled and data available
     if (this.config.enableMultiTimeframe && safeContext.multiTimeframeData) {
       this.logger.debug('Step 3: Starting multi-timeframe score calculation', { tokenAddress });
-      try {
-        multiTimeframeResult = await this.withTimeout(
-          this.multiTimeframeCalculator.calculate(
-            safeContext.multiTimeframeData,
-            safeContext
-          ),
-          10000, // 10 second timeout
-          `Multi-timeframe calculation timeout for ${tokenAddress}`
-        );
-        enhancedScores.pattern = multiTimeframeResult.finalScore;
-        this.logger.debug('Step 3 completed: Multi-timeframe score calculated', {
+      
+      // Check if multiTimeframeData contains raw chart data or calculated indicators
+      const hasValidIndicators = this.hasValidMultiTimeframeIndicators(safeContext.multiTimeframeData);
+      
+      if (hasValidIndicators) {
+        try {
+          multiTimeframeResult = await this.withTimeout(
+            this.multiTimeframeCalculator.calculate(
+              safeContext.multiTimeframeData as any, // Cast to MultiTimeframeData
+              safeContext
+            ),
+            10000, // 10 second timeout
+            `Multi-timeframe calculation timeout for ${tokenAddress}`
+          );
+          enhancedScores.pattern = multiTimeframeResult.finalScore;
+          this.logger.debug('Step 3 completed: Multi-timeframe score calculated', {
+            tokenAddress,
+            finalScore: multiTimeframeResult.finalScore.toFixed(1),
+            duration: `${Date.now() - startTime}ms`
+          });
+        } catch (error) {
+          this.logger.error('Multi-timeframe calculation failed, using default', {
+            tokenAddress,
+            error: error instanceof Error ? error.message : 'Unknown error'
+          });
+          enhancedScores.pattern = 50; // Default neutral score
+        }
+      } else {
+        this.logger.info('Step 3 skipped: Multi-timeframe data contains raw chart data, not calculated indicators', { 
           tokenAddress,
-          finalScore: multiTimeframeResult.finalScore.toFixed(1),
-          duration: `${Date.now() - startTime}ms`
+          availableTimeframes: Object.keys(safeContext.multiTimeframeData),
+          dataTypes: Object.entries(safeContext.multiTimeframeData).map(([tf, data]) => 
+            `${tf}: ${Array.isArray(data) ? `${data.length} chart points` : 'indicators'}`
+          )
         });
-      } catch (error) {
-        this.logger.error('Multi-timeframe calculation failed, using default', {
-          tokenAddress,
-          error: error instanceof Error ? error.message : 'Unknown error'
-        });
-        enhancedScores.pattern = 50; // Default neutral score
+        enhancedScores.pattern = 50; // Neutral score when data is not in expected format
       }
     } else {
       this.logger.debug('Step 3 skipped: Multi-timeframe disabled or no data', { tokenAddress });
+      enhancedScores.pattern = 50; // Neutral score when disabled
     }
 
     // Calculate consecutive momentum bonus if enabled
@@ -335,7 +381,7 @@ export class RatingEngine {
             technicalIndicators,
             momentum,
             volume,
-            safeContext.multiTimeframeData,
+            multiTimeframeForConfidence,
             safeContext
           ),
           5000, // 5 second timeout
@@ -414,7 +460,7 @@ export class RatingEngine {
       enhancedScores,
       safeContext,
       this.getHistoricalAccuracy(safeContext.tokenData.address),
-      safeContext.multiTimeframeData,
+      multiTimeframeForConfidence,
       consecutiveMomentumResult ? {
         periods: consecutiveMomentumResult.periods,
         consecutiveCount: consecutiveMomentumResult.consecutiveCount,
@@ -474,9 +520,13 @@ export class RatingEngine {
       confidence,
       components: enhancedScores,
       weights: {
-        ...weights,
+        technical: weights.technical,
+        momentum: weights.momentum,
+        volume: weights.volume,
+        risk: weights.risk,
+        pattern: weights.multiTimeframe,
         fundamentals: 0
-      } as Record<keyof ScoreComponents, number>,
+      },
       reasoning,
       alerts,
       recommendation
